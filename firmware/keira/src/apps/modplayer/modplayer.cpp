@@ -13,6 +13,20 @@
 
 #include "modplayer.h"
 
+typedef enum {
+    CMD_SET_PAUSED,
+    CMD_SET_GAIN,
+    CMD_STOP,
+} PlayerCommandType;
+
+typedef struct {
+    PlayerCommandType type;
+    union {
+        bool isPaused;
+        float gain;
+    };
+} PlayerCommand;
+
 ModPlayerApp::ModPlayerApp(String path) :
     App("MODPlayer", 0, 0, lilka::display.width(), lilka::display.height()),
     playerCommandQueue(xQueueCreate(8, sizeof(PlayerCommand))) {

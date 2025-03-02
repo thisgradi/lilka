@@ -3,18 +3,18 @@
 #include <lilka.h>
 
 #include "app.h"
-#include "analyzer.h"
+#include "../modplayer/analyzer.h"
 
 typedef struct {
     AudioOutputAnalyzer* analyzer;
     bool isPaused;
     bool isFinished;
     float gain;
-} PlayerTaskData;
+} WebRadioTaskData;
 
-class ModPlayerApp : public App {
+class WebRadioApp : public App {
 public:
-    explicit ModPlayerApp(String path);
+    explicit WebRadioApp();
     void run() override;
 
 private:
@@ -23,10 +23,10 @@ private:
     QueueHandle_t playerCommandQueue;
     String fileName;
 
-    SemaphoreHandle_t playerMutex;
-    // playerTaskData is accessed by both the player task and the app task.
+    SemaphoreHandle_t webRadioMutex;
+    // webRadioTaskData is accessed by both the player task and the app task.
     // It's important to always lock the mutex before accessing it.
-    PlayerTaskData playerTaskData = {
+    WebRadioTaskData webRadioTaskData = {
         .analyzer = NULL,
         .isPaused = false,
         .isFinished = false,
