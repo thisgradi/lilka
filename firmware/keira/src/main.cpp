@@ -1,6 +1,7 @@
 #include <lilka.h>
 
-#include "keira_splash.h"
+//#include "keira_splash.h"
+#include "new_lilka_splash_v01.h"
 
 #include "servicemanager.h"
 #include "appmanager.h"
@@ -18,7 +19,8 @@ AppManager* appManager = AppManager::getInstance();
 ServiceManager* serviceManager = ServiceManager::getInstance();
 
 void setup() {
-    lilka::display.setSplash(keira_splash, keira_splash_length);
+    // lilka::display.setSplash(keira_splash, keira_splash_length);
+    lilka::display.setSplash(new_lilka_splash_v01, new_lilka_splash_v01_length);
     lilka::begin();
     serviceManager->addService(new NetworkService());
     serviceManager->addService(new ClockService());
