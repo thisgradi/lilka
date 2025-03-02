@@ -94,7 +94,7 @@ void LauncherApp::run() {
                     ITEM::APP("Pastebin", [this]() { this->runApp<pastebinApp>(); }),
                 },
                 &demos_img,
-                lilka::colors::Pink
+                lilka::colors::Arylide_yellow
             ),
             ITEM::APP(
                 "Браузер SD-карти",
@@ -106,7 +106,7 @@ void LauncherApp::run() {
                 "Браузер SPIFFS",
                 [this]() { this->runApp<FileManagerApp>(LILKA_SPIFFS_ROOT); },
                 &memory_img,
-                lilka::colors::Dark_sea_green
+                lilka::colors::Arylide_yellow
             ),
             ITEM::SUBMENU(
                 "Розробка",
@@ -115,7 +115,7 @@ void LauncherApp::run() {
                     ITEM::APP("Lua REPL", [this]() { this->runApp<LuaReplApp>(); }),
                 },
                 &dev_img,
-                lilka::colors::Jasmine
+                lilka::colors::Arylide_yellow
             ),
             ITEM::SUBMENU(
                 "Налаштування",
@@ -193,7 +193,7 @@ void LauncherApp::run() {
                      }),
                 },
                 &settings_img,
-                lilka::colors::Orchid
+                lilka::colors::Black
             ),
         }
     );

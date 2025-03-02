@@ -137,20 +137,7 @@ void Menu::draw(Arduino_GFX* canvas) {
     uint16_t menu_size = items.size();
     const bool needsScrollbar = menu_size > MENU_HEIGHT;
 
-    canvas->fillScreen(lilka::colors::Black);
-    int8_t angleShift = sin(millis() / 1000.0) * 16;
-    // Draw triangle in top-left
-    canvas->fillTriangle(0, 0, 48 - angleShift, 0, 0, 48 + angleShift, lilka::colors::Blue);
-    // Draw triangle in top-right
-    canvas->fillTriangle(
-        canvas->width(),
-        0,
-        canvas->width() - 48 - angleShift,
-        0,
-        canvas->width(),
-        48 - angleShift,
-        lilka::colors::Yellow
-    );
+    canvas->fillScreen(0x7000); // dark red
 
     const uint16_t titleWidth = getTextWidth(FONT_6x13, title.c_str()) * 2;
     const uint16_t titleWidthAvailable = canvas->width() - 64;
@@ -163,7 +150,7 @@ void Menu::draw(Arduino_GFX* canvas) {
         marquee.setCursor(
             calculateMarqueeShift(millis() - firstRender, titleWidth - titleWidthAvailable, 50), titleTextHeight
         );
-        marquee.setTextColor(lilka::colors::White);
+        marquee.setTextColor(lilka::colors::Arylide_yellow);
         marquee.println(title);
         canvas->draw16bitRGBBitmapWithTranColor(
             32, 0, marquee.getFramebuffer(), lilka::colors::Black, marquee.width(), marquee.height()
@@ -173,7 +160,7 @@ void Menu::draw(Arduino_GFX* canvas) {
         canvas->setFont(FONT_6x13);
         canvas->setTextSize(2);
         canvas->setCursor(32, 40);
-        canvas->setTextColor(lilka::colors::White);
+        canvas->setTextColor(lilka::colors::Arylide_yellow);
         canvas->setTextBound(32, 8, titleWidthAvailable, titleTextHeight);
         canvas->println(title);
     }
@@ -183,7 +170,7 @@ void Menu::draw(Arduino_GFX* canvas) {
         (cursor * itemHeight + itemsY - 20) - scroll * itemHeight,
         canvas->width() - (needsScrollbar ? scrollbarWidth : 0),
         itemHeight,
-        lilka::colors::Orange_red
+        lilka::colors::Black
     );
 
     for (int i = scroll; i < MIN(scroll + MENU_HEIGHT, menu_size); i++) {
@@ -269,7 +256,10 @@ void Menu::draw(Arduino_GFX* canvas) {
             if (items[i].color && cursor != i) {
                 canvas->setTextColor(items[i].color);
             } else {
-                canvas->setTextColor(lilka::colors::White);
+                if (cursor == i)
+                    canvas->setTextColor(lilka::colors::White);
+                else
+                    canvas->setTextColor(lilka::colors::Arylide_yellow);
             }
             canvas->println(items[i].title);
         }
