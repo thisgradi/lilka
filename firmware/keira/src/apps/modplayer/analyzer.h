@@ -1,5 +1,8 @@
 #include <AudioOutput.h>
 
+#ifndef ANALYZER_H
+#define ANALYZER_H
+
 #define ANALYZER_BUFFER_SIZE 256
 
 class AudioOutputAnalyzer : public AudioOutput {
@@ -28,3 +31,5 @@ protected:
     int16_t bufferDivisor = 0;
     int16_t buffer[ANALYZER_BUFFER_SIZE];
 };
+
+#endif
