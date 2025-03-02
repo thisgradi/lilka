@@ -31,6 +31,7 @@
 #include "liltracker/liltracker.h"
 #include "fmanager/fmanager.h"
 #include "pastebin/pastebinApp.h"
+#include "planktimer/plank_timer.h"
 #include "webradio/webradio.h"
 
 #include "settings/sound.h"
@@ -86,6 +87,7 @@ void LauncherApp::run() {
                         },
                         &app_group_img, 0
                     ),
+                    ITEM::APP("Планка", [this]() { this->runApp<PlankTimerApp>();}),
                     ITEM::APP("ВебРадіо", [this]() { this->runApp<WebRadioApp>();}),
                     ITEM::APP("ЛілТрекер", [this]() { this->runApp<LilTrackerApp>(); }),
                     ITEM::APP("Летріс", [this]() { this->runApp<LetrisApp>(); }),
