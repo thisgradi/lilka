@@ -30,14 +30,21 @@
 typedef enum {
     CMD_SET_PAUSED,
     CMD_SET_GAIN,
-    CMD_STOP,
+    CMD_CHANGE_STATION,
+    CMD_STOP
 } PlayerCommandType;
+
+typedef enum {
+    SSDIR_NEXT,
+    SSDIR_PREV
+} StationScrollDirection;
 
 typedef struct {
     PlayerCommandType type;
     union {
         bool isPaused;
         float gain;
+        bool direction;
     };
 } PlayerCommand;
 
@@ -49,8 +56,7 @@ WebRadioApp::WebRadioApp() :
     // However, player task will run on core 0 since it's less busy. /AD
     setCore(1);
     // Get local file name (path minus mount point)
-    fileName = "http://31.128.79.192:8000/live"; // yedenradio.com (audio/mpeg)
-    //fileName = "https://online.radioroks.ua/RadioROKS"; // radioroks.ua (audio/mpeg) doesn't work somehow
+    v_stations = getStations("foobar");
     webRadioMutex = xSemaphoreCreateMutex();
     xSemaphoreGive(webRadioMutex);
 }
@@ -81,6 +87,7 @@ void WebRadioApp::run() {
         xSemaphoreGive(webRadioMutex);
         lilka::State state = lilka::controller.getState();
         if (state.a.justPressed) {
+            // Play / Pause
             PlayerCommand command = {.type = CMD_SET_PAUSED, .isPaused = !info.isPaused};
             xQueueSend(playerCommandQueue, &command, portMAX_DELAY);
         };
@@ -91,11 +98,23 @@ void WebRadioApp::run() {
             break;
         };
         if (state.up.justPressed) {
+            // Volume up
             PlayerCommand command = {.type = CMD_SET_GAIN, .gain = info.gain + 0.25f};
             xQueueSend(playerCommandQueue, &command, portMAX_DELAY);
         };
         if (state.down.justPressed) {
+            // Volume down
             PlayerCommand command = {.type = CMD_SET_GAIN, .gain = info.gain - 0.25f};
+            xQueueSend(playerCommandQueue, &command, portMAX_DELAY);
+        };
+        if (state.right.justPressed) {
+            // Station next
+            PlayerCommand command = {.type = CMD_CHANGE_STATION, .direction = SSDIR_NEXT};
+            xQueueSend(playerCommandQueue, &command, portMAX_DELAY);
+        };
+        if (state.left.justPressed) {
+            // Station previous
+            PlayerCommand command = {.type = CMD_CHANGE_STATION, .direction = SSDIR_PREV};
             xQueueSend(playerCommandQueue, &command, portMAX_DELAY);
         };
     };
@@ -156,13 +175,19 @@ void WebRadioApp::mainWindow() {
     canvas->print("↑ / ↓");
     canvas->setFont(FONT_9x15);
     canvas->println(" - Гучність");
+    canvas->setFont(FONT_9x15_SYMBOLS);
+    canvas->print("← / →");
+    canvas->setFont(FONT_9x15);
+    canvas->println(" - Зміна станції");
     canvas->println("B - Вихід");
     canvas->println("------------------------");
     canvas->println("Гучність: " + String(info.gain));
     if (info.isFinished) canvas->println("Стрім закінчився");
     if (info.isPaused) canvas->setTextColor(lilka::colors::Black_shadows);
-    canvas->printf("\n%s", fileName.c_str());
-    
+    xSemaphoreTake(webRadioMutex, portMAX_DELAY);
+    canvas->printf("\n%s", v_stations[webRadioTaskData.station_ID].c_str());
+    xSemaphoreGive(webRadioMutex);
+
     queueDraw();
 }
 
@@ -185,7 +210,7 @@ void WebRadioApp::playTask() {
     std::unique_ptr<AudioOutputAnalyzer> analyzerPtr(webRadioTaskData.analyzer);
     
     // Create source
-    AudioFileSourceHTTPStream* httpSource = new AudioFileSourceHTTPStream(fileName.c_str());
+    AudioFileSourceHTTPStream* httpSource = new AudioFileSourceHTTPStream(v_stations[webRadioTaskData.station_ID].c_str());
     std::unique_ptr<AudioFileSource> httpSourcePtr(httpSource);
     
     // Create buffer
@@ -215,23 +240,51 @@ void WebRadioApp::playTask() {
                 case CMD_SET_GAIN:
                     xSemaphoreTake(webRadioMutex, portMAX_DELAY);
                     webRadioTaskData.gain = command.gain;
-                    xSemaphoreGive(webRadioMutex);
                     if (webRadioTaskData.gain < 0) webRadioTaskData.gain = 0;
                     if (webRadioTaskData.gain > 4) webRadioTaskData.gain = 4;
+                    xSemaphoreGive(webRadioMutex);
                     out->SetGain(webRadioTaskData.gain);
+                    break;
+                case CMD_CHANGE_STATION:
+                    xSemaphoreTake(webRadioMutex, portMAX_DELAY);
+                    if ((command.direction == SSDIR_PREV)
+                    &&  (webRadioTaskData.station_ID > 0))
+                        --webRadioTaskData.station_ID;
+                    else 
+                    if ((command.direction == SSDIR_NEXT)
+                    &&  (webRadioTaskData.station_ID < (v_stations.size() - 1)))
+                        ++webRadioTaskData.station_ID;
+                    else 
+                    {
+                        xSemaphoreGive(webRadioMutex);
+                        break; // station can't be changed
+                    }
+
+                    // otherwise change the station
+                    if (gen_mp3->isRunning()) gen_mp3->stop();
+                    //if (httpBufferSource->isOpen()) httpBufferSource->close(); 
+                    if (httpSource->isOpen()) httpSource->close();
+                    httpSource->open(v_stations[webRadioTaskData.station_ID].c_str());
+                    gen_mp3->begin(httpBufferSource, webRadioTaskData.analyzer);
+                    xSemaphoreGive(webRadioMutex);
                     break;
                 case CMD_STOP:
                     xSemaphoreTake(webRadioMutex, portMAX_DELAY);
+                    gen_mp3->stop();
                     webRadioTaskData.isFinished = true;
                     xSemaphoreGive(webRadioMutex);
                     break;
             }
         }
         xSemaphoreTake(webRadioMutex, portMAX_DELAY);
+        if (webRadioTaskData.isFinished) {
+            gen_mp3->stop();
+            xSemaphoreGive(webRadioMutex);
+            break;
+        }
         if (!webRadioTaskData.isPaused) {               // while playing
             if (!gen_mp3->loop()) {                     // check if the chunk is finished
-            //if (!gen_mp3->isRunning()) {
-                //gen_mp3->stop();
+                gen_mp3->stop();
                 xSemaphoreGive(webRadioMutex);
                 break;                                  // if finished -> go to the next chunk
             }
@@ -242,4 +295,16 @@ void WebRadioApp::playTask() {
 
     // Tasks must ALWAYS delete themselves before exiting, or we're get IllegalInstruction panic
     vTaskDelete(NULL);
+}
+
+std::vector<String> WebRadioApp::getStations(String filename)
+{
+    std::vector<String> v_stations;
+    //v_stations.push_back("http://free.rcast.net/281780"); // Jazz von 1A Radio
+    v_stations.push_back("http://stream.srg-ssr.ch/m/rsj/mp3_128"); // Radio Swiss Jazz (audio/mpeg)
+    v_stations.push_back("http://us2.internet-radio.com/proxy/megatoncafe?mp=/stream;"); // Megaton Cafe Radio (audio/mpeg)
+    v_stations.push_back("http://31.128.79.192:8000/live"); // yedenradio.com (audio/mpeg)
+    //v_stations.push_back("https://manager6.streamradio.fr:1100/stream"); // majesticjukeboxradio.com (audio/mpeg)
+    //v_stations.push_back("http://free.rcast.net/210247"); // TJS Japanese Radio Station (128 Kbps)
+    return v_stations;
 }
