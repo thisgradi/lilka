@@ -41,8 +41,9 @@ private:
         .station_ID = 0
     };
     WindowState window_state;
-    ushort main_menu_selected_item;
     PlayerView player_view;
+    lilka::Menu menu;
+    String current_catalog;
 
 public:
     explicit WebRadioApp();
@@ -52,5 +53,9 @@ private:
     void mainWindow();
     void menuWindow();
     void playTask();
+    void visualizer_DVD_box();
+    void visualizer_snake();
+    void visualizer_gain_graph();
+    void alert(String title, String message);
     std::vector<String> getStations(String filename);
 };

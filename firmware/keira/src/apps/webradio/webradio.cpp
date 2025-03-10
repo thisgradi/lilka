@@ -28,8 +28,10 @@
 #include <AudioFileSourceHTTPStream.h>
 #include <AudioGeneratorMP3.h>
 //#include "lilka/board.h"
-
+#include "utils/defer.h"
 #include "webradio.h"
+
+#define WEBRADIO_ROOT   "/webradios"
 
 typedef enum {
     CMD_SET_PAUSED,
@@ -63,7 +65,6 @@ WebRadioApp::WebRadioApp() :
     v_stations = getStations("foobar");
     window_state = WINDOW_MAIN;
     player_view = PVIEW_MAIN;
-    main_menu_selected_item = 0;
 
     webRadioMutex = xSemaphoreCreateMutex();
     xSemaphoreGive(webRadioMutex);
@@ -161,7 +162,7 @@ void WebRadioApp::run() {
                 case PVIEW_MAIN:       
                 {
                     player_view = PVIEW_VISUALIZER; 
-                    //lilka::board.disablePowerSavingMode(); this doesn't work yet, audio and screen are hardwired 
+                    //lilka::board.disablePowerSavingMode(); this requires hardware modification
                     break;
                 }
                 case PVIEW_VISUALIZER: player_view = PVIEW_OFF; break;
@@ -171,25 +172,147 @@ void WebRadioApp::run() {
     };
 }
 
+void WebRadioApp::alert(String title, String message) {
+    vTaskDelay(LILKA_UI_UPDATE_DELAY_MS * 100 / portTICK_PERIOD_MS); // to account for button jitter
+    lilka::Alert alertDialog(title, message);
+    alertDialog.draw(canvas);
+    queueDraw();
+    while (!alertDialog.isFinished()) {
+        alertDialog.update();
+    }
+}
+
 void WebRadioApp::menuWindow() {
     const int  total_items = 2;
 
-    canvas->fillScreen(lilka::colors::Black);
-    canvas->setFont(FONT_9x15);
-    canvas->setTextBound(32, 32, canvas->width() - 64, canvas->height() - 32);
-    canvas->setTextColor(lilka::colors::White);
-    canvas->setCursor(32, 32 + 15);
-    canvas->println("Веб-радіо: меню");
-    canvas->println("------------------------");
+    // canvas->fillScreen(lilka::colors::Black);
+    // canvas->setFont(FONT_9x15);
+    // canvas->setTextBound(32, 32, canvas->width() - 64, canvas->height() - 32);
+    // canvas->setTextColor(lilka::colors::White);
+    // canvas->setCursor(32, 32 + 15);
+    // canvas->println("Веб-радіо: меню");
+    // canvas->println("------------------------");
+    // canvas->println("Тицяй B (нижня-права)");
+    static String currentPath = WEBRADIO_ROOT;
+    const String type_M3U = ".m3u";
+    const String type_JSON = ".json";
 
-    queueDraw();
+    lilka::Menu menu("Веб-радіо: меню");
+    menu.addItem("Відкрити каталог", 0, 0, "");
+    menu.addItem("Додати станцію", 0, 0, "");
+    menu.addItem("<< Назад", 0, 0, "");
+
+    menu.addActivationButton(lilka::Button::B); // Back
+    menu.addActivationButton(lilka::Button::A); // Enter
+
+    int16_t index = 0;
+    while (!menu.isFinished()) {
+        menu.update();
+        menu.draw(canvas);
+        queueDraw();
+        index = menu.getCursor();
+        if (menu.getButton() == lilka::Button::B) {  // Назад (кнопка B)
+            menu.removeActivationButton(lilka::Button::A);
+            menu.removeActivationButton(lilka::Button::B);
+            window_state = WINDOW_MAIN;
+            return;
+        }
+        switch (index) {
+            case 0: {   // Відкрити каталог
+                if (!lilka::controller.peekState().a.justPressed) {
+                    break;
+                }
+                vTaskDelay(LILKA_UI_UPDATE_DELAY_MS * 50 / portTICK_PERIOD_MS); // to account for button jitter
+                // see LilTrackerApp::filePicker
+                if (!SD.exists(currentPath)) { 
+                    alert("Помилка", "Не вдалося відкрити директорію " WEBRADIO_ROOT);
+                    break;
+                }
+                File root = SD.open(currentPath);
+                if (!root) {
+                    alert("Помилка", "Не вдалося відкрити директорію " WEBRADIO_ROOT);
+                    break;
+                }
+                int fileCount = lilka::fileutils.getEntryCount(&SD, currentPath);
+                if (0 == fileCount) {
+                    alert("Помилка", "Директорія " WEBRADIO_ROOT " порожня");
+                    break;
+                }
+                lilka::Entry entries[fileCount];
+                std::vector<String> filenames;
+                lilka::fileutils.listDir(&SD, currentPath, entries);
+
+                menu.clearItems();
+                menu.setTitle(currentPath);
+                for (int i = 0; i < fileCount; ++i) {
+                    if (lilka::EntryType::ENT_DIRECTORY == entries[i].type) {
+                        // TODO: directories
+                        continue;
+                    }
+                    if (!entries[i].name.endsWith(type_M3U) && !entries[i].name.endsWith(type_JSON)) {
+                        continue;
+                    }
+                    menu.addItem(entries[i].name);
+                    filenames.push_back(entries[i].name);
+                }
+                menu.addItem("<< Назад");
+
+                while (!menu.isFinished()) {
+                    menu.update();
+                    menu.draw(canvas);
+                    queueDraw();
+                    int16_t subindex = menu.getCursor();
+                    if ((menu.getButton() == lilka::Button::B) || 
+                        (menu.getButton() == lilka::Button::A && 
+                         (subindex == menu.getItemCount() - 1))) { // Назад
+                        menu.clearItems();
+                        menu.setTitle("Веб-радіо: меню");
+                        menu.addItem("Відкрити каталог", 0, 0, "");
+                        menu.addItem("Додати станцію", 0, 0, "");
+                        menu.addItem("<< Назад", 0, 0, "");
+                        break;
+                    }
+                    else
+                    {
+                        if (menu.getButton() == lilka::Button::A)
+                        {
+                            current_catalog = currentPath + "/" + filenames[subindex];
+                            std::vector<String> new_stations = getStations(current_catalog);
+                            if (!new_stations.empty()) v_stations = new_stations;
+                            menu.clearItems();
+                            menu.setTitle("Веб-радіо: меню");
+                            menu.addItem("Відкрити каталог", 0, 0, "");
+                            menu.addItem("Додати станцію", 0, 0, "");
+                            menu.addItem("<< Назад", 0, 0, "");
+                            break;
+                        }
+                    }
+                }
+
+                break;
+            }
+            case 1: {   // Додати станцію
+
+                break;
+            }
+            case 2: {   // Назад (пункт меню)
+                if (menu.getButton() == lilka::Button::A) {
+                    menu.removeActivationButton(lilka::Button::A);
+                    menu.removeActivationButton(lilka::Button::B);
+                    window_state = WINDOW_MAIN;
+                    return;
+                }
+                break;
+            }
+        }
+    }
 }
 
 void WebRadioApp::mainWindow() {
     
     // if (PVIEW_OFF == player_view) 
     // {
-    //     lilka::board.enablePowerSavingMode(); // this doesn't work yet, audio and screen are hardwired 
+    //     lilka::board.enablePowerSavingMode(); // this requires hardware modification
     //     return;
     // }
 
@@ -199,37 +322,9 @@ void WebRadioApp::mainWindow() {
     bool shouldDrawAnalyzer = (PVIEW_OFF != player_view) && !webRadioTaskData.isPaused && !webRadioTaskData.isFinished;
     xSemaphoreGive(webRadioMutex);    
     if (shouldDrawAnalyzer) {
-        int16_t analyzerBuffer[ANALYZER_BUFFER_SIZE];
-        xSemaphoreTake(webRadioMutex, portMAX_DELAY);
-        webRadioTaskData.analyzer->readBuffer(analyzerBuffer);
-        int16_t head = webRadioTaskData.analyzer->getBufferHead();
-        float gain = webRadioTaskData.gain;
-        xSemaphoreGive(webRadioMutex);
-
-        int16_t prevX, prevY;
-        int16_t width = canvas->width();
-        int16_t height = canvas->height();
-
-        constexpr int16_t HUE_SPEED_DIV = 4;
-        constexpr int16_t HUE_SCALE = 4;
-        int16_t yCenter = height;
-        if (PVIEW_MAIN == player_view) yCenter *= 0.71;
-        else                           yCenter *= 0.5;
-
-        int64_t time = millis();
-
-        for (int i = 0; i < ANALYZER_BUFFER_SIZE; i += 4) {
-            int x = i * width / ANALYZER_BUFFER_SIZE;
-            int index = (i + head) % ANALYZER_BUFFER_SIZE;
-            float amplitude = static_cast<float>(analyzerBuffer[index]) / 32768 * fmaxf(gain, 1.0f);
-            int y = yCenter + static_cast<int>(amplitude * height / 2);
-            if (i > 0) {
-                int16_t hue = (time / HUE_SPEED_DIV + i / HUE_SCALE) % 360;
-                canvas->drawLine(prevX, prevY, x, y, lilka::display.color565hsv(hue, 100, 100));
-            }
-            prevX = x;
-            prevY = y;
-        }
+        //visualizer_DVD_box();
+        //visualizer_snake();
+        visualizer_gain_graph();
     }
 
     if (PVIEW_MAIN == player_view)
@@ -306,6 +401,30 @@ void WebRadioApp::playTask() {
                 case CMD_SET_PAUSED:
                     xSemaphoreTake(webRadioMutex, portMAX_DELAY);
                     webRadioTaskData.isPaused = command.isPaused;
+                    if (!(webRadioTaskData.isPaused))
+                    {
+                        if (gen_mp3->isRunning()) gen_mp3->stop();
+                        if (httpSource->isOpen()) httpSource->close();
+
+                        if (!(httpSource->open(v_stations[webRadioTaskData.station_ID].c_str())))
+                        {
+                            alert("Помилка", "Не вдалося відкрити HTTP");
+                            httpSource->close();
+                            gen_mp3->stop();
+                            webRadioTaskData.isPaused = true;
+                            xSemaphoreGive(webRadioMutex);
+                            break;
+                        }    
+                        if (!(gen_mp3->begin(httpBufferSource, webRadioTaskData.analyzer)))
+                        {
+                            alert("Помилка", "Не вдалося запустити MP3");
+                            httpSource->close();
+                            gen_mp3->stop();
+                            webRadioTaskData.isPaused = true;
+                            xSemaphoreGive(webRadioMutex);
+                            break;
+                        }
+                    }
                     xSemaphoreGive(webRadioMutex);
                     break;
                 case CMD_SET_GAIN:
@@ -330,13 +449,32 @@ void WebRadioApp::playTask() {
                         xSemaphoreGive(webRadioMutex);
                         break; // station can't be changed
                     }
-
-                    // otherwise change the station
+                    
                     if (gen_mp3->isRunning()) gen_mp3->stop();
-                    //if (httpBufferSource->isOpen()) httpBufferSource->close(); 
                     if (httpSource->isOpen()) httpSource->close();
-                    httpSource->open(v_stations[webRadioTaskData.station_ID].c_str());
-                    gen_mp3->begin(httpBufferSource, webRadioTaskData.analyzer);
+                    if (!webRadioTaskData.isPaused)
+                    {
+                        // otherwise change the station
+                        //if (httpBufferSource->isOpen()) httpBufferSource->close(); 
+                        if (!(httpSource->open(v_stations[webRadioTaskData.station_ID].c_str())))
+                        {
+                            alert("Помилка", "Не вдалося відкрити HTTP");
+                            httpSource->close();
+                            gen_mp3->stop();
+                            webRadioTaskData.isPaused = true;
+                            xSemaphoreGive(webRadioMutex);
+                            break;
+                        }    
+                        if (!(gen_mp3->begin(httpBufferSource, webRadioTaskData.analyzer)))
+                        {
+                            alert("Помилка", "Не вдалося запустити MP3");
+                            httpSource->close();
+                            gen_mp3->stop();
+                            webRadioTaskData.isPaused = true;
+                            xSemaphoreGive(webRadioMutex);
+                            break;
+                        }
+                    }
                     xSemaphoreGive(webRadioMutex);
                     break;
                 case CMD_STOP:
@@ -368,11 +506,197 @@ void WebRadioApp::playTask() {
     vTaskDelete(NULL);
 }
 
+void WebRadioApp::visualizer_DVD_box()
+{
+    // the movement will not be affected by the gain
+    // the hue / opacity / rectangle size could
+
+    static int16_t current_x = 140;
+    static int16_t current_y = 120;
+
+    enum DVD_Direction_X { W, E };
+    static DVD_Direction_X direction_x = E;
+
+    enum DVD_Direction_Y { N, S };
+    static DVD_Direction_Y direction_y = N;
+
+    const int16_t canvas_width = canvas->width();   // 280
+    const int16_t canvas_height = canvas->height(); // 240
+    const int16_t box_height = 23;
+    const int16_t box_width = 37;
+
+    // constexpr int16_t HUE_SPEED_DIV = 4;
+    // constexpr int16_t HUE_SCALE = 4;
+
+    // int64_t time = millis();
+    // int16_t hue = (time / HUE_SPEED_DIV + 1 / HUE_SCALE) % 360;
+
+    // canvas->fillRect(current_x, current_y, box_width, box_height, lilka::display.color565hsv(hue, 100, 100));
+    canvas->drawRect(current_x, current_y, box_width, box_height, lilka::colors::Red);
+
+    if (current_x + box_width == canvas_width) direction_x = W;
+    if (current_x == 0) direction_x = E;
+    if (current_y == 0) direction_y = N;
+    if (current_y + box_height == canvas_height) direction_y = S;
+
+    current_y += (S == direction_y) ? -1 : 1;
+    current_x += (W == direction_x) ? -1 : 1;
+}
+
+void WebRadioApp::visualizer_snake()
+{
+    // the movement will not be affected by the gain
+    // the hue / opacity could
+
+    struct Coordinates {
+        int16_t pixel_x;
+        int16_t pixel_y;
+    };
+
+    static std::vector<Coordinates> v_snake;
+
+    static int16_t current_x = 140;
+    static int16_t current_y = 120;
+    
+    enum Snake_Direction_X { W, E };
+    static Snake_Direction_X direction_x = E;
+    
+    enum Snake_Direction_Y { N, S };
+    static Snake_Direction_Y direction_y = N;
+    
+    const int16_t snake_max_length = 100;
+    const int16_t canvas_width     = canvas->width();  // 280
+    const int16_t canvas_height    = canvas->height(); // 240
+
+    int16_t snake_actual_length = v_snake.size();
+    
+    if (current_x == canvas_width)  direction_x = W;
+    if (current_x == 0)             direction_x = E;
+    if (current_y == 0)             direction_y = N;
+    if (current_y == canvas_height) direction_y = S;
+    
+    current_y += (S == direction_y) ? -1 : 1;
+    current_x += (W == direction_x) ? -1 : 1;
+
+    if (snake_max_length == snake_actual_length) v_snake.erase(v_snake.begin());
+    v_snake.push_back({current_x, current_y});
+
+    for (int i = 0; i < snake_actual_length; ++i)
+    {
+        canvas->drawPixel(v_snake[i].pixel_x, v_snake[i].pixel_y, lilka::colors::Red);
+    }
+}
+
+void WebRadioApp::visualizer_gain_graph()
+{
+    int16_t analyzerBuffer[ANALYZER_BUFFER_SIZE];
+    xSemaphoreTake(webRadioMutex, portMAX_DELAY);
+    webRadioTaskData.analyzer->readBuffer(analyzerBuffer);
+    int16_t head = webRadioTaskData.analyzer->getBufferHead();
+    float gain = webRadioTaskData.gain;
+    xSemaphoreGive(webRadioMutex);
+
+    int16_t prevX, prevY;
+    int16_t width = canvas->width();
+    int16_t height = canvas->height();
+
+    constexpr int16_t HUE_SPEED_DIV = 4;
+    constexpr int16_t HUE_SCALE = 4;
+    int16_t yCenter = height;
+    if (PVIEW_MAIN == player_view) yCenter *= 0.71;
+    else                           yCenter *= 0.5;
+
+    int64_t time = millis();
+
+    for (int i = 0; i < ANALYZER_BUFFER_SIZE; i += 4) {
+        int x = i * width / ANALYZER_BUFFER_SIZE;
+        int index = (i + head) % ANALYZER_BUFFER_SIZE;
+        float amplitude = static_cast<float>(analyzerBuffer[index]) / 32768 * fmaxf(gain, 1.0f);
+        int y = yCenter + static_cast<int>(amplitude * height / 2);
+        if (i > 0) {
+            int16_t hue = (time / HUE_SPEED_DIV + i / HUE_SCALE) % 360;
+            canvas->drawLine(prevX, prevY, x, y, lilka::display.color565hsv(hue, 100, 100));
+        }
+        prevX = x;
+        prevY = y;
+    }
+}
+
 std::vector<String> WebRadioApp::getStations(String filename)
 {
-    std::vector<String> v_stations;
-    v_stations.push_back("http://stream.srg-ssr.ch/m/rsj/mp3_128"); // Radio Swiss Jazz (audio/mpeg)
-    v_stations.push_back("http://31.128.79.192:8000/live"); // yedenradio.com (audio/mpeg)
-    v_stations.push_back("http://87.118.87.46:8888/stream/1/"); // radiosuperoldie.com
-    return v_stations;
+    static bool b_once = true;
+    std::vector<String> stations;
+    if (b_once) 
+    {
+        b_once = false;
+        stations.push_back("http://stream.srg-ssr.ch/m/rsj/mp3_128"); // Radio Swiss Jazz (audio/mpeg)
+        stations.push_back("http://31.128.79.192:8000/live"); // yedenradio.com (audio/mpeg)
+        stations.push_back("http://87.118.87.46:8888/stream/1/"); // radiosuperoldie.com
+        return stations;
+    }
+    stations.clear();
+
+    lilka::serial_log("getStations filename: [%s]\n", filename.c_str());
+    File file = SD.open(filename, FILE_READ);
+    if (!file) {
+        alert("Помилка", "Не вдалося відкрити файл " + filename);
+        return v_stations;
+    }
+    Defer closeFile([&file]() { file.close(); });
+    lilka::serial_log("file.size(): [%d]\n", file.size());
+    uint8_t* buff = new uint8_t[file.size()];
+    std::unique_ptr<uint8_t[]> buffPtr(buff);
+    file.read(buff, file.size());
+    
+    // In .M3U stations look as follows:
+    //#EXTINF: ... , sample name - NNN kbit/sLF
+    //http://sample.TLD/foobarLF
+    //#EXTINF: ... , sample name - NNN kbit/sLF
+    //http://sample.TLD/foobarLF
+    
+    size_t file_size = file.size();
+    size_t i = 0;
+    bool url_is_station = false;
+    while (file_size > i)
+    {
+        if (0 == memcmp((char*)(buff + (i * sizeof(uint8_t))), "http:", 5))
+        {
+            size_t url_length = 5;
+            if (url_is_station || i == 0)
+            {            
+                while ('\n' != buff[i + url_length]) ++url_length;
+                uint8_t url_buff[url_length + 1] = "";
+                url_buff[url_length] = '\0';
+                memcpy(url_buff, (char*)(buff + i * sizeof(uint8_t)), url_length);
+
+                url_is_station = false;
+                stations.push_back((char*)url_buff);
+                lilka::serial_log("url: [%s]\n", (char*)url_buff);
+            }
+            i += url_length + 1;
+            continue;
+        }
+        else
+        {
+            url_is_station = false; // url will be considered a station only if it starts right after "\n"
+        }
+        if ('#' == (char)buff[i]) 
+        {
+            if (0 == memcmp((char*)(buff + i * sizeof(uint8_t)), "#EXTINF:", 8))
+            {
+                // lilka::serial_log("#EXTINF:\n");
+                i += 8;
+                continue;
+            }
+        }
+        if ('\n' == (char)buff[i]) 
+        {
+            // lilka::serial_log("LF");
+            url_is_station = true; // if we find a line starting with "http:" next, it will be considered a station
+        }
+        ++i;
+    }
+    
+    alert("Оброблено!", String("Станцій: ") + stations.size());
+    return stations;
 }
