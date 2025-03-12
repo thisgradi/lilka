@@ -668,6 +668,7 @@ std::vector<String> WebRadioApp::getStations(String filename)
                 uint8_t url_buff[url_length + 1] = "";
                 url_buff[url_length] = '\0';
                 memcpy(url_buff, (char*)(buff + i * sizeof(uint8_t)), url_length);
+                if (url_buff[url_length - 1] == '\r') url_buff[url_length - 1] = '\0'; // CRLF format: line ends with \r\n
 
                 url_is_station = false;
                 stations.push_back((char*)url_buff);
