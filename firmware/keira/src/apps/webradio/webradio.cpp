@@ -9,17 +9,30 @@
 //
 // Актуальні баги:
 // * Зависання відтворення в момент старту з зависанням графіку;
-// * Зависання відтворення через тривалий час з порожнім графіком (та, подекуди, шумом);
 // * Відтворення одних потоків, й неможливість відтворення інших з типом audio/mpeg;
+// * [ 30017][E][WiFiClient.cpp:275] connect(): socket error on fd 49, errno: 104, "Connection reset by peer" (радіо: http://radio.wanderingsheep.tv:8000/jazzcafe)
 //
 // Пошук станції:
 // 1. Знайшли веб-сторінку з кнопочкою "Play";
 // 2. ПКМ -> Inspect або F12;
-// 3. Ctrl+F -> audio/mpeg -> копіюємо значення "src" з лапками включно;
+// 3. Ctrl+F -> audio/mpeg або audio -> копіюємо значення "src" з лапками включно;
 // або
 // Шукайте http посилання в загальнодоступних .m3u списках відтворення: 
 // Приклад: https://github.com/junguler/m3u-radio-music-playlists
-//
+// 
+// Додавання каталогів:
+// Додаток підтримує зчитування списку станцій з файлів формату M3U.
+// В актуальній версії програми, каталоги мають лежати в папці webradios (без вкладених папок).
+// M3U файли повинні містити посилання на аудіопотоки, кожне з нової строки, без зайвих даних в 
+// тій самій строці. Посилання починаються з "http:". Інші строки ігноруються (станом на коміт #5)
+
+// TODO: 
+// * Перевірка стану WiFi-з'єднання.
+// * Меню налаштування.
+// * Збереження та читання налаштувань з використанням файлу.
+// * Опція видалення станції після виникнення помилки відкриття.
+// * Опція збереження поточної станції в список обраних.
+// * Збереження path поточного каталогу, та станції в файл.
 
 #include <AudioOutputI2S.h>
 #include <AudioFileSourceBuffer.h>
@@ -185,14 +198,6 @@ void WebRadioApp::alert(String title, String message) {
 void WebRadioApp::menuWindow() {
     const int  total_items = 2;
 
-    // canvas->fillScreen(lilka::colors::Black);
-    // canvas->setFont(FONT_9x15);
-    // canvas->setTextBound(32, 32, canvas->width() - 64, canvas->height() - 32);
-    // canvas->setTextColor(lilka::colors::White);
-    // canvas->setCursor(32, 32 + 15);
-    // canvas->println("Веб-радіо: меню");
-    // canvas->println("------------------------");
-    // canvas->println("Тицяй B (нижня-права)");
     static String currentPath = WEBRADIO_ROOT;
     const String type_M3U = ".m3u";
     const String type_JSON = ".json";
@@ -492,10 +497,12 @@ void WebRadioApp::playTask() {
             break;
         }
         if (!webRadioTaskData.isPaused) {               // while playing
-            if (!gen_mp3->loop()) {                     // check if the chunk is finished
+            if (!gen_mp3->loop()) {
+                webRadioTaskData.isPaused = true;
+                alert("Упс", "Плеєр більше не грає");
                 gen_mp3->stop();
                 xSemaphoreGive(webRadioMutex);
-                break;                                  // if finished -> go to the next chunk
+                // break;                               
             }
         }
         xSemaphoreGive(webRadioMutex);
@@ -629,9 +636,15 @@ std::vector<String> WebRadioApp::getStations(String filename)
     if (b_once) 
     {
         b_once = false;
-        stations.push_back("http://stream.srg-ssr.ch/m/rsj/mp3_128"); // Radio Swiss Jazz (audio/mpeg)
-        stations.push_back("http://31.128.79.192:8000/live"); // yedenradio.com (audio/mpeg)
-        stations.push_back("http://87.118.87.46:8888/stream/1/"); // radiosuperoldie.com
+        stations.push_back("http://stream.srg-ssr.ch/m/rsj/mp3_128");   // Radio Swiss Jazz (audio/mpeg)
+        stations.push_back("http://31.128.79.192:8000/live");           // yedenradio.com (audio/mpeg)
+        stations.push_back("http://87.118.87.46:8888/stream/1/");       // radiosuperoldie.com
+
+        stations.push_back("http://91.218.213.49:8000/ur1-mp3");        // Українське радіо
+        stations.push_back("http://91.218.213.49:8000/ur2-mp3");        // Радіо Промінь
+        stations.push_back("http://91.218.213.49:8000/ur3-mp3-m");      // Радіо Культура
+        stations.push_back("http://217.20.173.105:8100/live");          // Європа Плюс Київ
+        stations.push_back("http://185.65.245.34:8000/kiev");           // Країна ФМ
         return stations;
     }
     stations.clear();
@@ -655,48 +668,70 @@ std::vector<String> WebRadioApp::getStations(String filename)
     //http://sample.TLD/foobarLF
     
     size_t file_size = file.size();
-    size_t i = 0;
-    bool url_is_station = false;
-    while (file_size > i)
-    {
-        if (0 == memcmp((char*)(buff + (i * sizeof(uint8_t))), "http:", 5))
-        {
-            size_t url_length = 5;
-            if (url_is_station || i == 0)
-            {            
-                while ('\n' != buff[i + url_length]) ++url_length;
-                uint8_t url_buff[url_length + 1] = "";
-                url_buff[url_length] = '\0';
-                memcpy(url_buff, (char*)(buff + i * sizeof(uint8_t)), url_length);
-                if (url_buff[url_length - 1] == '\r') url_buff[url_length - 1] = '\0'; // CRLF format: line ends with \r\n
+    size_t file_position = 0;
+    size_t url_start_position = 0;
+    size_t url_length = 0;
+    char current_symbol = ' ';
+    bool line_not_complete = true;
+    bool url_not_complete = true;
+    bool url_terminator_found = false;
 
-                url_is_station = false;
-                stations.push_back((char*)url_buff);
-                lilka::serial_log("url: [%s]\n", (char*)url_buff);
-            }
-            i += url_length + 1;
-            continue;
-        }
-        else
+    while (file_size > file_position)
+    {
+        if (file_size <= file_position + 5) break;
+        if (0 == memcmp((char*)(buff + (file_position * sizeof(uint8_t))), "http:", 5))
         {
-            url_is_station = false; // url will be considered a station only if it starts right after "\n"
-        }
-        if ('#' == (char)buff[i]) 
-        {
-            if (0 == memcmp((char*)(buff + i * sizeof(uint8_t)), "#EXTINF:", 8))
+            // line starts with "http:" - parse the whole line as a station
+            url_start_position = file_position;
+            url_not_complete = true;
+            url_terminator_found = false;
+            line_not_complete = true;
+            file_position += 4;
+            
+            // Note: following spaghetti code is best served with the mayonnaise
+            do 
             {
-                // lilka::serial_log("#EXTINF:\n");
-                i += 8;
-                continue;
+                ++file_position;
+                current_symbol = buff[file_position];
+                if (url_not_complete)
+                {
+                    switch (current_symbol)
+                    {
+                        case '\n':
+                            line_not_complete = false;
+                        case ' ' :
+                        case '\r':
+                            url_terminator_found = true;
+                        default:
+                            if (file_size == file_position) { line_not_complete = false; }
+                            if (url_not_complete && (url_terminator_found || (!line_not_complete))) // EOF, or terminator, and URL is yet to be saved ->
+                            {                                                                       // -> save the URL
+                                url_length = file_position - url_start_position;
+                                uint8_t url_buff[url_length + 2] = "";                              // we'll have 1 extra byte except for EOF
+                                                                                                    // TODO: figure out if initialization needs to be done outside the loop
+                                
+                                memcpy(url_buff, (char*)(buff + url_start_position * sizeof(uint8_t)), url_length);
+                                
+                                if (!url_terminator_found) url_buff[url_length + 1] = '\0';
+                                else                       url_buff[url_length] = '\0';
+                                lilka::serial_log("station saved: [%s]\n", url_buff);
+                                stations.push_back((char*)url_buff);
+                                url_not_complete = false;
+                                file_position += url_length;
+                                break;
+                            }
+                    }
+                }
+                if ((file_size <= file_position) || ('\n' == current_symbol)) line_not_complete = false;
             }
+            while (line_not_complete);
+        } // end of "http:" block
+        else
+        { // we don't support metadata yet - so let's skip non-URL lines altogether
+            do { current_symbol = buff[file_position]; ++file_position; }
+            while (('\n' != current_symbol) && (file_size > file_position));
         }
-        if ('\n' == (char)buff[i]) 
-        {
-            // lilka::serial_log("LF");
-            url_is_station = true; // if we find a line starting with "http:" next, it will be considered a station
-        }
-        ++i;
-    }
+    }    
     
     alert("Оброблено!", String("Станцій: ") + stations.size());
     return stations;
